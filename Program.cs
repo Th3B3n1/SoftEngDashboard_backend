@@ -1,10 +1,12 @@
 using System.IO.Compression;
 using System.Threading.RateLimiting;
-using Backend.Filters;
-using Backend.Services;
+
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.ResponseCompression;
+
+using Backend.Filters;
+using Backend.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
