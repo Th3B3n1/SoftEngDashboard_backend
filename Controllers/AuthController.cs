@@ -18,9 +18,9 @@ public class AuthController(
     /// </summary>
     [HttpPost("login")]
     [EnableRateLimiting("auth")]
-    public async Task<ActionResult<LoginResponseDto>> Login([FromBody] LoginRequestDto request)
+    public async Task<ActionResult<LoginResponseDto>> Login([FromBody] LoginRequestDto request, CancellationToken ct)
     {
-        LoginResponseDto result = await _authService.LoginAsync(request.Username, request.Password);
+        LoginResponseDto result = await _authService.LoginAsync(request.Username, request.Password, ct);
         return Ok(result);
     }
 }

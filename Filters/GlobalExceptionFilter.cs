@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 
@@ -8,14 +9,17 @@ public partial class GlobalExceptionFilter(ILogger<GlobalExceptionFilter> logger
 {
     private readonly ILogger<GlobalExceptionFilter> _logger = logger;
 
+    [LoggerMessage(EventId = 1, Level = LogLevel.Error, Message = "Exception caught by GlobalExceptionFilter: {ErrorMessage}")]
+    private static partial void LogExceptionCaught(ILogger logger, Exception ex, string errorMessage);
+
     public void OnException(ExceptionContext context)
     {
-        _logger.LogError(context.Exception, "Exception caught by GlobalExceptionFilter: {Message}", context.Exception.Message);
+        LogExceptionCaught(_logger, context.Exception, context.Exception.Message);
 
         switch (context.Exception)
         {
             case UnauthorizedAccessException:
-                context.Result = new UnauthorizedObjectResult(new { error = context.Exception.Message });
+                context.Result = new UnauthorizedResult();
                 break;
 
             case ValidationException validationEx:
@@ -23,26 +27,19 @@ public partial class GlobalExceptionFilter(ILogger<GlobalExceptionFilter> logger
                 break;
 
             case KeyNotFoundException:
-                context.Result = new NotFoundObjectResult(new { error = context.Exception.Message });
+                context.Result = new NotFoundResult();
                 break;
 
-            case ArgumentException argumentEx:
-                context.Result = new BadRequestObjectResult(new { error = argumentEx.Message });
-                break;
-
-            case InvalidOperationException invalidOpEx:
-                context.Result = new BadRequestObjectResult(new { error = invalidOpEx.Message });
+            case ArgumentException:
+            case InvalidOperationException:
+                context.Result = new BadRequestResult();
                 break;
 
             default:
-                context.Result = new ObjectResult(new { error = context.Exception.Message })
-                {
-                    StatusCode = StatusCodes.Status500InternalServerError
-                };
+                context.Result = new StatusCodeResult(StatusCodes.Status500InternalServerError);
                 break;
         }
 
         context.ExceptionHandled = true;
     }
 }
-

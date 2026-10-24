@@ -1,8 +1,8 @@
 using System.IO.Compression;
+using System.Net;
 using System.Threading.RateLimiting;
 
 using Microsoft.AspNetCore.HttpOverrides;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.ResponseCompression;
 
 using Backend.Filters;
@@ -17,14 +17,21 @@ builder.Services.AddControllers(options =>
 
 builder.Services.AddHttpClient("HfPortal", client =>
 {
+    client.Timeout = TimeSpan.FromSeconds(10);
     client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36");
     client.DefaultRequestHeaders.Add("Accept", "application/json, text/plain, */*");
     client.DefaultRequestHeaders.Add("Referer", "https://softeng-hw.ftsrg.org/");
+})
+.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    AutomaticDecompression = DecompressionMethods.All,
+    PooledConnectionLifetime = TimeSpan.FromMinutes(5)
 });
+
 builder.Services.AddSingleton<MoodleAuthService>();
 builder.Services.AddScoped<HfPortalService>();
 
-string[] allowedOrigins = Environment.GetEnvironmentVariable("FRONTEND_URL")?.Split(';')
+string[] allowedOrigins = Environment.GetEnvironmentVariable("FRONTEND_URL")?.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
     ?? ["http://localhost:5173", "http://localhost:5174", "http://localhost:5228", "https://localhost:7203"];
 
 builder.Services.AddCors(options =>
@@ -38,7 +45,6 @@ builder.Services.AddCors(options =>
     });
 });
 
-
 builder.Services.AddResponseCompression(options =>
 {
     options.EnableForHttps = true;
@@ -50,15 +56,27 @@ builder.Services.Configure<BrotliCompressionProviderOptions>(options =>
     options.Level = CompressionLevel.Fastest;
 });
 
+static string GetClientIp(HttpContext httpContext)
+{
+    string? forwardedFor = httpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault();
+    if (!string.IsNullOrEmpty(forwardedFor))
+    {
+        // Use the rightmost IP appended by the trusted proxy (e.g. Heroku router) to prevent X-Forwarded-For spoofing
+        string[] ips = forwardedFor.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (ips.Length > 0)
+        {
+            return ips[^1];
+        }
+    }
+    return httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown-ip";
+}
+
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
     {
-        string? forwardedFor = httpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault();
-        string clientIp = !string.IsNullOrEmpty(forwardedFor)
-            ? forwardedFor.Split(',')[0].Trim()
-            : httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown-ip";
+        string clientIp = GetClientIp(httpContext);
 
         return RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: clientIp,
@@ -72,14 +90,21 @@ builder.Services.AddRateLimiter(options =>
             });
     });
 
-    // Stricter rate limit for authentication endpoint to prevent brute-force attacks
-    options.AddFixedWindowLimiter("auth", limiterOptions =>
+    // Partitioned per-IP rate limit for authentication endpoint to prevent brute-force attacks without global DoS
+    options.AddPolicy("auth", httpContext =>
     {
-        limiterOptions.PermitLimit = 10;
-        limiterOptions.Window = TimeSpan.FromMinutes(1);
-        limiterOptions.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
-        limiterOptions.QueueLimit = 0;
-        limiterOptions.AutoReplenishment = true;
+        string clientIp = GetClientIp(httpContext);
+
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: $"auth:{clientIp}",
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            });
     });
 });
 
@@ -98,6 +123,8 @@ app.Use(async (context, next) =>
     context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
     context.Response.Headers.Append("X-Frame-Options", "DENY");
     context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+    context.Response.Headers.Append("X-Permitted-Cross-Domain-Policies", "none");
+    context.Response.Headers.Append("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
     await next();
 });
 
