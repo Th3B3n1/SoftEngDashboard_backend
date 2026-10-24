@@ -1,1 +1,1 @@
-web: cd AdmTM.Api/bin/publish; ./AdmTM.Api --urls http://*:$PORT
+web: cd bin/publish; ./backend --urls http://*:$PORT
