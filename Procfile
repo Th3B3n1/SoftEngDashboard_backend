@@ -1,0 +1,1 @@
+web: cd AdmTM.Api/bin/publish; ./AdmTM.Api --urls http://*:$PORT
