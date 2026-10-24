@@ -13,7 +13,8 @@ public class HfPortalService(ILogger<HfPortalService> logger, IHttpClientFactory
         string cleanLtik = ltik.Trim();
         if (string.IsNullOrWhiteSpace(cleanLtik))
         {
-            throw new ArgumentException("Érvénytelen vagy hiányzó ltik token.");
+            _logger.LogError("HF Auth failed: empty ltik");
+            throw new ArgumentException();
         }
 
         HttpClient client = _httpClientFactory.CreateClient("HfPortal");
@@ -27,14 +28,23 @@ public class HfPortalService(ILogger<HfPortalService> logger, IHttpClientFactory
         {
             string errBody = await authRes.Content.ReadAsStringAsync(ct);
             _logger.LogWarning("HF Auth failed: {Status} {Err}", authRes.StatusCode, errBody);
-            throw new UnauthorizedAccessException("A HF Portál token érvénytelen vagy lejárt.");
+            if (authRes.StatusCode == System.Net.HttpStatusCode.Forbidden
+                || errBody.Contains("Cloudflare", StringComparison.OrdinalIgnoreCase)
+                || authRes.Headers.Contains("cf-ray"))
+            {
+                _logger.LogError("HF Portal blocked by Cloudflare. Consider using a local browser connection.");
+                throw new InvalidOperationException();
+            }
+            _logger.LogError("HF Auth failed: {Status} {Err}", authRes.StatusCode, errBody);
+            throw new UnauthorizedAccessException();
         }
 
         JsonObject? authJson = await authRes.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: ct);
         string? instId = authJson?["courseInstanceIds"]?[0]?.ToString();
         if (string.IsNullOrEmpty(instId))
         {
-            throw new KeyNotFoundException("Nem található kurzuspéldány a hallgatóhoz.");
+            _logger.LogError("HF Auth failed: No course instance found for the user.");
+            throw new KeyNotFoundException();
         }
 
         string instUrl = $"https://softeng-hw.ftsrg.org/api/course-instances/softeng/{instId}?ltik={Uri.EscapeDataString(cleanLtik)}";
@@ -52,11 +62,16 @@ public class HfPortalService(ILogger<HfPortalService> logger, IHttpClientFactory
 
         if (!instRes.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException("A kurzuspéldány nem érhető el.");
+            _logger.LogError("HF Portal request failed: {Status} {Err}", instRes.StatusCode, await instRes.Content.ReadAsStringAsync(ct));
+            throw new InvalidOperationException();
         }
 
-        JsonObject instData = await instRes.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: ct)
-            ?? throw new InvalidOperationException("Üres válasz érkezett a HF portáltól.");
+        JsonObject? instData = await instRes.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: ct);
+        if (instData == null)
+        {
+            _logger.LogError("HF Portal request failed: {Status} {Err}", instRes.StatusCode, await instRes.Content.ReadAsStringAsync(ct));
+            throw new InvalidOperationException();
+        }
 
         return instData;
     }

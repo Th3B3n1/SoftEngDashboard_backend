@@ -33,9 +33,8 @@ builder.Services.AddCors(options =>
     {
         policy
             .WithMethods("GET", "POST", "OPTIONS")
-            .WithHeaders("Content-Type", "Authorization", "X-Requested-With")
-            .WithOrigins(allowedOrigins)
-            .AllowCredentials();
+            .WithHeaders("Content-Type")
+            .WithOrigins(allowedOrigins);
     });
 });
 
