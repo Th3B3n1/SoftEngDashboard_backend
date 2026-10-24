@@ -20,7 +20,7 @@ public class AuthController(
     [EnableRateLimiting("auth")]
     public async Task<ActionResult<LoginResponseDto>> Login([FromBody] LoginRequestDto request)
     {
-        var result = await _authService.LoginAsync(request.Username, request.Password);
+        LoginResponseDto result = await _authService.LoginAsync(request.Username, request.Password);
         return Ok(result);
     }
 }

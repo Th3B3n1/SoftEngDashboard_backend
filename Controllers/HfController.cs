@@ -1,6 +1,9 @@
+using System.Text.Json.Nodes;
+
+using Microsoft.AspNetCore.Mvc;
+
 using Backend.DTOs;
 using Backend.Services;
-using Microsoft.AspNetCore.Mvc;
 
 namespace Backend.Controllers;
 
@@ -17,7 +20,7 @@ public class HfController(
     [HttpGet("status")]
     public async Task<IActionResult> GetStatus([FromQuery] HfStatusRequestDto query, CancellationToken ct)
     {
-        var result = await _hfPortalService.GetStatusAsync(query.Ltik, ct);
+        JsonObject result = await _hfPortalService.GetStatusAsync(query.Ltik, ct);
         return Ok(result);
     }
 }

@@ -8,7 +8,7 @@ using Microsoft.AspNetCore.ResponseCompression;
 using Backend.Filters;
 using Backend.Services;
 
-var builder = WebApplication.CreateBuilder(args);
+WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers(options =>
 {
@@ -24,7 +24,7 @@ builder.Services.AddHttpClient("HfPortal", client =>
 builder.Services.AddSingleton<MoodleAuthService>();
 builder.Services.AddScoped<HfPortalService>();
 
-var allowedOrigins = Environment.GetEnvironmentVariable("FRONTEND_URL")?.Split(';')
+string[] allowedOrigins = Environment.GetEnvironmentVariable("FRONTEND_URL")?.Split(';')
     ?? ["http://localhost:5173", "http://localhost:5174", "http://localhost:5228", "https://localhost:7203"];
 
 builder.Services.AddCors(options =>
@@ -84,7 +84,7 @@ builder.Services.AddRateLimiter(options =>
     });
 });
 
-var app = builder.Build();
+WebApplication app = builder.Build();
 
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
