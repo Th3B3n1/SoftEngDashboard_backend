@@ -36,7 +36,7 @@ public class HfController(
         string? ltik = await _moodleAuthService.ExtractLtiTokenFromWsTokenAsync(req.WsToken, ct);
         if (string.IsNullOrWhiteSpace(ltik))
         {
-            return NotFound(new { error = "A Házi Feladat Portál nem érhető el közvetlenül a szerverről, vagy az LTI indítás nem sikerült." });
+            return Ok(new { ltik = (string?)null, status = (JsonObject?)null });
         }
 
         JsonObject status = await _hfPortalService.GetStatusAsync(ltik, ct);
