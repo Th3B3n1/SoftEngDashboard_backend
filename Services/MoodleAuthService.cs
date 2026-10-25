@@ -345,12 +345,219 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
         }
 
         return new LoginResponseDto(
-            Token: wsToken,
+            Token: MoodleTokenCrypto.Protect(wsToken),
             UserId: siteInfoJson?.UserId ?? 0,
             FullName: siteInfoJson?.FullName ?? username,
             Username: siteInfoJson?.Username ?? username,
             Ltik: ltik
         );
+    }
+
+    public async Task<string?> ExtractLtiTokenFromWsTokenAsync(string wsTokenInput, CancellationToken parentCt = default)
+    {
+        try
+        {
+            string? wsToken = MoodleTokenCrypto.Unprotect(wsTokenInput);
+            if (string.IsNullOrEmpty(wsToken))
+            {
+                return null;
+            }
+
+            using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(parentCt);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            CancellationToken ct = cts.Token;
+
+            CookieContainer cookieContainer = new CookieContainer();
+            using SocketsHttpHandler handler = new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false,
+                UseCookies = true,
+                CookieContainer = cookieContainer,
+                AutomaticDecompression = DecompressionMethods.All
+            };
+
+            using HttpClient client = new HttpClient(handler);
+            client.Timeout = TimeSpan.FromSeconds(5);
+            client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+            client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+
+            // 1. Find LTI tool ID in Course 16995 via mod_lti_get_ltis_by_courses
+            int toolId = 0;
+            using (FormUrlEncodedContent ltisReq = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                { "wstoken", wsToken },
+                { "wsfunction", "mod_lti_get_ltis_by_courses" },
+                { "courseids[0]", "16995" },
+                { "moodlewsrestformat", "json" }
+            }))
+            {
+                using HttpResponseMessage ltisResp = await client.PostAsync($"{MoodleBase}/webservice/rest/server.php", ltisReq, ct);
+                if (ltisResp.IsSuccessStatusCode)
+                {
+                    System.Text.Json.Nodes.JsonNode? ltisJson = await ltisResp.Content.ReadFromJsonAsync<System.Text.Json.Nodes.JsonNode>(cancellationToken: ct);
+                    System.Text.Json.Nodes.JsonArray? ltisArr = ltisJson?["ltis"] as System.Text.Json.Nodes.JsonArray;
+                    if (ltisArr != null)
+                    {
+                        foreach (System.Text.Json.Nodes.JsonNode? item in ltisArr)
+                        {
+                            int cmid = item?["coursemodule"]?.GetValue<int>() ?? 0;
+                            int id = item?["id"]?.GetValue<int>() ?? 0;
+                            if (cmid == 221136 && id > 0)
+                            {
+                                toolId = id;
+                                break;
+                            }
+                            if (toolId == 0 && id > 0)
+                            {
+                                toolId = id;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (toolId <= 0)
+            {
+                logger.LogWarning("LTI via wstoken: Could not find LTI tool ID in course 16995");
+                return null;
+            }
+
+            // 2. Request signed launch data via mod_lti_get_tool_launch_data
+            string? endpoint = null;
+            List<KeyValuePair<string, string>> launchParams = [];
+            using (FormUrlEncodedContent launchDataReq = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                { "wstoken", wsToken },
+                { "wsfunction", "mod_lti_get_tool_launch_data" },
+                { "toolid", toolId.ToString() },
+                { "moodlewsrestformat", "json" }
+            }))
+            {
+                using HttpResponseMessage launchResp = await client.PostAsync($"{MoodleBase}/webservice/rest/server.php", launchDataReq, ct);
+                if (!launchResp.IsSuccessStatusCode)
+                {
+                    return null;
+                }
+
+                System.Text.Json.Nodes.JsonNode? launchJson = await launchResp.Content.ReadFromJsonAsync<System.Text.Json.Nodes.JsonNode>(cancellationToken: ct);
+                endpoint = launchJson?["endpoint"]?.ToString();
+                System.Text.Json.Nodes.JsonArray? paramsArr = launchJson?["parameters"] as System.Text.Json.Nodes.JsonArray;
+                if (paramsArr != null)
+                {
+                    foreach (System.Text.Json.Nodes.JsonNode? p in paramsArr)
+                    {
+                        string? name = p?["name"]?.ToString();
+                        string? val = p?["value"]?.ToString();
+                        if (!string.IsNullOrEmpty(name) && val != null)
+                        {
+                            launchParams.Add(new KeyValuePair<string, string>(name, val));
+                        }
+                    }
+                }
+            }
+
+            if (string.IsNullOrEmpty(endpoint) || !IsAllowedUrl(endpoint, out _))
+            {
+                logger.LogWarning("LTI via wstoken: Invalid or untrusted endpoint {Endpoint}", endpoint);
+                return null;
+            }
+
+            // 3. Submit signed launch parameters to endpoint
+            using FormUrlEncodedContent initialPost = new FormUrlEncodedContent(launchParams);
+            (HttpResponseMessage? resp, string? capturedLtik) = await PostWithRedirectsAsync(client, endpoint, initialPost, ct);
+            if (!string.IsNullOrEmpty(capturedLtik))
+            {
+                resp?.Dispose();
+                return capturedLtik;
+            }
+            if (resp == null) return null;
+
+            try
+            {
+                string? loc = GetLocation(resp);
+                if (!string.IsNullOrEmpty(loc) && loc.Contains("ltik=", StringComparison.Ordinal))
+                {
+                    return ExtractLtikFromUrl(loc);
+                }
+
+                string html = await resp.Content.ReadAsStringAsync(ct);
+                Match m = LtikRegex().Match(html);
+                if (m.Success)
+                {
+                    return m.Groups[1].Value;
+                }
+
+                if (IsCloudflareResponse(resp, html))
+                {
+                    logger.LogWarning("LTI via wstoken: Cloudflare block detected on {Endpoint}", endpoint);
+                    return null;
+                }
+
+                // Follow any intermediate auto-submitting forms
+                for (int hop = 0; hop < 4; hop++)
+                {
+                    if (ct.IsCancellationRequested) break;
+
+                    string formAction = WebUtility.HtmlDecode(MatchFirst(FormActionRegex(), html));
+                    if (string.IsNullOrEmpty(formAction)) break;
+
+                    formAction = ResolveUrl(endpoint, formAction);
+                    if (!IsAllowedUrl(formAction, out _)) return null;
+
+                    Dictionary<string, string> formData = new Dictionary<string, string>();
+                    foreach (Match inp in InputTagRegex().Matches(html))
+                    {
+                        string tag = inp.Value;
+                        string name = MatchFirst(InputNameRegex(), tag);
+                        string val = WebUtility.HtmlDecode(MatchFirst(InputValueRegex(), tag));
+                        if (!string.IsNullOrEmpty(name))
+                        {
+                            formData[name] = val;
+                        }
+                    }
+
+                    using FormUrlEncodedContent hopPost = new FormUrlEncodedContent(formData);
+                    (HttpResponseMessage? postResp, string? postCapturedLtik) = await PostWithRedirectsAsync(client, formAction, hopPost, ct);
+                    if (!string.IsNullOrEmpty(postCapturedLtik))
+                    {
+                        postResp?.Dispose();
+                        return postCapturedLtik;
+                    }
+                    if (postResp == null) break;
+
+                    resp.Dispose();
+                    resp = postResp;
+
+                    string? postLoc = GetLocation(resp);
+                    if (!string.IsNullOrEmpty(postLoc) && postLoc.Contains("ltik=", StringComparison.Ordinal))
+                    {
+                        return ExtractLtikFromUrl(postLoc);
+                    }
+
+                    html = await resp.Content.ReadAsStringAsync(ct);
+                    m = LtikRegex().Match(html);
+                    if (m.Success)
+                    {
+                        return m.Groups[1].Value;
+                    }
+
+                    if (!resp.IsSuccessStatusCode || IsCloudflareResponse(resp, html))
+                    {
+                        return null;
+                    }
+                }
+            }
+            finally
+            {
+                resp.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("LTI via wstoken failed (non-blocking): {Msg}", ex.Message);
+        }
+
+        return null;
     }
 
     private async Task<string?> TryExtractLtiTokenAsync(HttpClient client, CancellationToken parentCt)

@@ -14,6 +14,24 @@ public partial class GlobalExceptionFilter(ILogger<GlobalExceptionFilter> logger
 
     public void OnException(ExceptionContext context)
     {
+        if (context.Exception is OperationCanceledException)
+        {
+            if (context.HttpContext.RequestAborted.IsCancellationRequested)
+            {
+                context.Result = new StatusCodeResult(499);
+                context.ExceptionHandled = true;
+                return;
+            }
+
+            _logger.LogWarning("Upstream request timed out: {Message}", context.Exception.Message);
+            context.Result = new ObjectResult(new { error = "A külső szerver nem válaszolt időben." })
+            {
+                StatusCode = StatusCodes.Status504GatewayTimeout
+            };
+            context.ExceptionHandled = true;
+            return;
+        }
+
         LogExceptionCaught(_logger, context.Exception, context.Exception.Message);
 
         switch (context.Exception)

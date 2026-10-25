@@ -28,7 +28,20 @@ builder.Services.AddHttpClient("HfPortal", client =>
     PooledConnectionLifetime = TimeSpan.FromMinutes(5)
 });
 
+builder.Services.AddHttpClient("MoodleApi", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(15);
+    client.DefaultRequestHeaders.Add("User-Agent", "MoodleMobile/4.4.0");
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
+})
+.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    AutomaticDecompression = DecompressionMethods.All,
+    PooledConnectionLifetime = TimeSpan.FromMinutes(5)
+});
+
 builder.Services.AddSingleton<MoodleAuthService>();
+builder.Services.AddSingleton<MoodleProxyService>();
 builder.Services.AddScoped<HfPortalService>();
 
 string[] allowedOrigins = Environment.GetEnvironmentVariable("FRONTEND_URL")?.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)

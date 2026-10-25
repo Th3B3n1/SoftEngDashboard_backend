@@ -23,5 +23,22 @@ public class AuthController(
         LoginResponseDto result = await _authService.LoginAsync(request.Username, request.Password, ct);
         return Ok(result);
     }
+
+    /// <summary>
+    /// Encrypts a raw 32-character Moodle token into a server-bound AES-256-GCM token
+    /// so the raw Moodle token never needs to be stored in the browser.
+    /// </summary>
+    [HttpPost("protect-token")]
+    public IActionResult ProtectToken([FromBody] ProtectTokenRequestDto request)
+    {
+        string? raw = MoodleTokenCrypto.Unprotect(request.Token);
+        if (string.IsNullOrEmpty(raw))
+        {
+            return BadRequest(new { error = "Érvénytelen Moodle token." });
+        }
+
+        string protectedToken = MoodleTokenCrypto.Protect(raw);
+        return Ok(new { token = protectedToken });
+    }
 }
 
