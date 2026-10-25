@@ -19,3 +19,9 @@ public record LoginResponseDto(
     string? Ltik = null
 );
 
+public record ProtectTokenRequestDto(
+    [param:
+        Required(ErrorMessage = "A Moodle token megadása kötelező"),
+        StringLength(512, MinimumLength = 32, ErrorMessage = "Érvénytelen Moodle token hossz"),
+        RegularExpression(@"^(enc:[A-Za-z0-9\-_]+|[0-9a-fA-F]{32})$", ErrorMessage = "Érvénytelen Moodle token formátum")] string Token
+);

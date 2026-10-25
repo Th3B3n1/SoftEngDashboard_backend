@@ -7,8 +7,6 @@ namespace Backend.Controllers;
 [Route("api/moodle")]
 public class MoodleController(MoodleProxyService proxyService) : ControllerBase
 {
-    private readonly MoodleProxyService _proxyService = proxyService;
-
     /// <summary>
     /// Proxies Moodle Web Service calls after decrypting the server-protected token,
     /// enforcing a strict read-only function allowlist and Course 16995 scope.
@@ -23,7 +21,7 @@ public class MoodleController(MoodleProxyService proxyService) : ControllerBase
         }
 
         IFormCollection form = await Request.ReadFormAsync(ct);
-        (int statusCode, string contentJson) = await _proxyService.ExecuteReadOnlyCourseCallAsync(form, ct);
+        (int statusCode, string contentJson) = await proxyService.ExecuteReadOnlyCourseCallAsync(form, ct);
         return new ContentResult
         {
             StatusCode = statusCode,
@@ -32,4 +30,3 @@ public class MoodleController(MoodleProxyService proxyService) : ControllerBase
         };
     }
 }
-

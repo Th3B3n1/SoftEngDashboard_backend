@@ -6,84 +6,99 @@ namespace Backend.Services;
 
 public class HfPortalService(ILogger<HfPortalService> logger, IHttpClientFactory httpClientFactory)
 {
-    private readonly ILogger<HfPortalService> _logger = logger;
-    private readonly IHttpClientFactory _httpClientFactory = httpClientFactory;
+    private const string PortalBase = "https://softeng-hw.ftsrg.org";
 
     public async Task<JsonObject> GetStatusAsync(string ltik, CancellationToken ct = default)
     {
         string cleanLtik = ltik.Trim();
         if (string.IsNullOrWhiteSpace(cleanLtik))
         {
-            _logger.LogError("HF Auth failed: empty ltik");
+            logger.LogError("HF Auth failed: empty ltik");
             throw new ArgumentException();
         }
 
-        HttpClient client = _httpClientFactory.CreateClient("HfPortal");
+        HttpClient client = httpClientFactory.CreateClient("HfPortal");
         string escapedLtik = Uri.EscapeDataString(cleanLtik);
 
-        string authUrl = $"https://softeng-hw.ftsrg.org/api/auth?ltik={escapedLtik}";
-        using HttpRequestMessage authReq = new HttpRequestMessage(HttpMethod.Get, authUrl);
-        authReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cleanLtik);
-
-        using HttpResponseMessage authRes = await client.SendAsync(authReq, ct);
-        if (!authRes.IsSuccessStatusCode)
+        using (HttpResponseMessage authRes = await SendAuthenticatedGetAsync(
+            client,
+            $"{PortalBase}/api/auth?ltik={escapedLtik}",
+            cleanLtik,
+            ct))
         {
-            string errBody = await authRes.Content.ReadAsStringAsync(ct);
-            if (authRes.StatusCode == HttpStatusCode.Forbidden
-                || errBody.Contains("Cloudflare", StringComparison.OrdinalIgnoreCase)
-                || authRes.Headers.Contains("cf-ray"))
+            if (!authRes.IsSuccessStatusCode)
             {
-                _logger.LogError("HF Portal blocked by Cloudflare. Status: {Status}", authRes.StatusCode);
-                throw new InvalidOperationException();
+                string errBody = await authRes.Content.ReadAsStringAsync(ct);
+                if (authRes.StatusCode == HttpStatusCode.Forbidden
+                    || errBody.Contains("Cloudflare", StringComparison.OrdinalIgnoreCase)
+                    || authRes.Headers.Contains("cf-ray"))
+                {
+                    logger.LogError("HF Portal blocked by Cloudflare. Status: {Status}", authRes.StatusCode);
+                    throw new InvalidOperationException();
+                }
+
+                logger.LogError("HF Auth failed: {Status} {Err}", authRes.StatusCode, errBody);
+                throw new UnauthorizedAccessException();
             }
-            _logger.LogError("HF Auth failed: {Status} {Err}", authRes.StatusCode, errBody);
-            throw new UnauthorizedAccessException();
-        }
 
-        JsonObject? authJson = await authRes.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: ct);
-        string? instId = authJson?["courseInstanceIds"]?[0]?.ToString();
-        if (string.IsNullOrWhiteSpace(instId))
-        {
-            _logger.LogError("HF Auth failed: No course instance found for the user.");
-            throw new KeyNotFoundException();
-        }
+            JsonObject? authJson = await authRes.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: ct);
+            string? instId = authJson?["courseInstanceIds"]?[0]?.ToString();
+            if (string.IsNullOrWhiteSpace(instId))
+            {
+                logger.LogError("HF Auth failed: No course instance found for the user.");
+                throw new KeyNotFoundException();
+            }
 
-        string escapedInstId = Uri.EscapeDataString(instId);
-        string instUrl = $"https://softeng-hw.ftsrg.org/api/course-instances/softeng/{escapedInstId}?ltik={escapedLtik}";
-        using HttpRequestMessage instReq = new HttpRequestMessage(HttpMethod.Get, instUrl);
-        instReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cleanLtik);
+            string escapedInstId = Uri.EscapeDataString(instId);
+            HttpResponseMessage instRes = await SendAuthenticatedGetAsync(
+                client,
+                $"{PortalBase}/api/course-instances/softeng/{escapedInstId}?ltik={escapedLtik}",
+                cleanLtik,
+                ct);
 
-        HttpResponseMessage instRes = await client.SendAsync(instReq, ct);
-        try
-        {
-            if (!instRes.IsSuccessStatusCode)
+            try
+            {
+                if (!instRes.IsSuccessStatusCode)
+                {
+                    instRes.Dispose();
+                    instRes = await SendAuthenticatedGetAsync(
+                        client,
+                        $"{PortalBase}/api/courses/softeng/{escapedInstId}?ltik={escapedLtik}",
+                        cleanLtik,
+                        ct);
+                }
+
+                if (!instRes.IsSuccessStatusCode)
+                {
+                    string errBody = await instRes.Content.ReadAsStringAsync(ct);
+                    logger.LogError("HF Portal request failed: {Status} {Err}", instRes.StatusCode, errBody);
+                    throw new InvalidOperationException();
+                }
+
+                JsonObject? instData = await instRes.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: ct);
+                if (instData == null)
+                {
+                    logger.LogError("HF Portal returned null JSON payload with status {Status}", instRes.StatusCode);
+                    throw new InvalidOperationException();
+                }
+
+                return instData;
+            }
+            finally
             {
                 instRes.Dispose();
-                string altUrl = $"https://softeng-hw.ftsrg.org/api/courses/softeng/{escapedInstId}?ltik={escapedLtik}";
-                using HttpRequestMessage altReq = new HttpRequestMessage(HttpMethod.Get, altUrl);
-                altReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", cleanLtik);
-                instRes = await client.SendAsync(altReq, ct);
             }
-
-            if (!instRes.IsSuccessStatusCode)
-            {
-                string errBody = await instRes.Content.ReadAsStringAsync(ct);
-                _logger.LogError("HF Portal request failed: {Status} {Err}", instRes.StatusCode, errBody);
-                throw new InvalidOperationException();
-            }
-
-            JsonObject? instData = await instRes.Content.ReadFromJsonAsync<JsonObject>(cancellationToken: ct);
-            if (instData == null)
-            {
-                _logger.LogError("HF Portal returned null JSON payload with status {Status}", instRes.StatusCode);
-                throw new InvalidOperationException();
-            }
-
-            return instData;
         }
-        finally
-        {
-            instRes.Dispose();
-        }
+    }
+
+    private static Task<HttpResponseMessage> SendAuthenticatedGetAsync(
+        HttpClient client,
+        string url,
+        string ltik,
+        CancellationToken ct)
+    {
+        HttpRequestMessage req = new(HttpMethod.Get, url);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", ltik);
+        return client.SendAsync(req, ct);
     }
 }

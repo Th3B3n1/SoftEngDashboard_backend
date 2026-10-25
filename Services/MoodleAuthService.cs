@@ -1,8 +1,8 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-
 using Backend.DTOs;
 
 namespace Backend.Services;
@@ -61,30 +61,27 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
         {
             return true;
         }
+
         validUri = null;
         return false;
     }
 
-    private static string ResolveUrl(string baseUrl, string relativeOrAbsoluteUrl)
-    {
-        if (relativeOrAbsoluteUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase))
-        {
-            return relativeOrAbsoluteUrl;
-        }
-        return new Uri(new Uri(baseUrl), relativeOrAbsoluteUrl).ToString();
-    }
+    private static string ResolveUrl(string baseUrl, string relativeOrAbsoluteUrl) =>
+        relativeOrAbsoluteUrl.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+            ? relativeOrAbsoluteUrl
+            : new Uri(new Uri(baseUrl), relativeOrAbsoluteUrl).ToString();
 
     public async Task<LoginResponseDto> LoginAsync(string username, string password, CancellationToken ct = default)
     {
         logger.LogInformation("Starting login process");
-        CookieContainer cookieContainer = new CookieContainer();
-        using HttpClientHandler handler = new HttpClientHandler
+        CookieContainer cookieContainer = new();
+        using HttpClientHandler handler = new()
         {
             CookieContainer = cookieContainer,
             AllowAutoRedirect = false,
             AutomaticDecompression = DecompressionMethods.All
         };
-        using HttpClient client = new HttpClient(handler)
+        using HttpClient client = new(handler)
         {
             Timeout = TimeSpan.FromSeconds(15)
         };
@@ -97,6 +94,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
         {
             throw new InvalidOperationException();
         }
+
         string html1;
         using (resp1)
         {
@@ -110,6 +108,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
             logger.LogError("Step 1 failed. HTML: {Html}", html1[..Math.Min(html1.Length, 300)]);
             throw new InvalidOperationException();
         }
+
         action1 = ResolveUrl(IdpBase, action1);
         if (!IsAllowedUrl(action1, out _))
         {
@@ -119,7 +118,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
 
         // 2. Submit initial IdP session check form
         logger.LogInformation("Step 2: Submitting IdP session check to {Action}", action1);
-        using FormUrlEncodedContent form1 = new FormUrlEncodedContent(new Dictionary<string, string>
+        using FormUrlEncodedContent form1 = new(new Dictionary<string, string>
         {
             { "csrf_token", csrf1 },
             { "shib_idp_ls_exception.shib_idp_session_ss", "" },
@@ -137,6 +136,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
         {
             throw new InvalidOperationException();
         }
+
         string html2;
         using (resp2)
         {
@@ -150,6 +150,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
             logger.LogError("Step 2 failed. HTML: {Html}", html2[..Math.Min(html2.Length, 300)]);
             throw new InvalidOperationException();
         }
+
         action2 = ResolveUrl(IdpBase, action2);
         if (!IsAllowedUrl(action2, out _))
         {
@@ -159,7 +160,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
 
         // 3. Submit credentials to BME IdP
         logger.LogInformation("Step 3: Submitting credentials to IdP {Action}", action2);
-        using FormUrlEncodedContent form2 = new FormUrlEncodedContent(new Dictionary<string, string>
+        using FormUrlEncodedContent form2 = new(new Dictionary<string, string>
         {
             { "j_username", username.Trim() },
             { "j_password", password },
@@ -172,6 +173,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
         {
             throw new InvalidOperationException();
         }
+
         string html3;
         using (resp3)
         {
@@ -205,7 +207,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
                 throw new InvalidOperationException();
             }
 
-            using FormUrlEncodedContent consentForm = new FormUrlEncodedContent(new Dictionary<string, string>
+            using FormUrlEncodedContent consentForm = new(new Dictionary<string, string>
             {
                 { "csrf_token", csrf3 },
                 { "_eventId_proceed", "" }
@@ -215,10 +217,12 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
             {
                 throw new InvalidOperationException();
             }
+
             using (consentResp)
             {
                 html3 = await consentResp.Content.ReadAsStringAsync(ct);
             }
+
             samlResponse = MatchFirst(SamlResponseRegex(), html3);
             relayState = MatchFirst(RelayStateRegex(), html3);
             spAction = WebUtility.HtmlDecode(MatchFirst(FormActionRegex(), html3));
@@ -234,9 +238,9 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
             throw new InvalidOperationException();
         }
 
-        logger.LogInformation("Step 4: Submitting SAMLResponse to {SpAction}", spAction);
         // 4. Submit SAMLResponse to Moodle Shibboleth consumer
-        using FormUrlEncodedContent form3 = new FormUrlEncodedContent(new Dictionary<string, string>
+        logger.LogInformation("Step 4: Submitting SAMLResponse to {SpAction}", spAction);
+        using FormUrlEncodedContent form3 = new(new Dictionary<string, string>
         {
             { "SAMLResponse", WebUtility.HtmlDecode(samlResponse) },
             { "RelayState", WebUtility.HtmlDecode(relayState ?? "") }
@@ -262,7 +266,6 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
             locationHeader = GetLocation(launchResp);
             logger.LogInformation("Step 5 launch response: {Status}, Location: {Loc}", launchResp.StatusCode, locationHeader);
 
-            // If not found in headers, follow or read HTML
             if (string.IsNullOrEmpty(locationHeader))
             {
                 string launchHtml = await launchResp.Content.ReadAsStringAsync(ct);
@@ -271,6 +274,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
                 {
                     locationHeader = MatchFirst(WindowLocationRegex(), launchHtml);
                 }
+
                 logger.LogInformation("Step 5 extracted from HTML: {Loc}", locationHeader);
             }
         }
@@ -283,40 +287,20 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
         }
 
         // 6. Decode token
-        string b64 = locationHeader.Split("token=").Last().Split('&')[0];
-        b64 = WebUtility.UrlDecode(b64).Replace('-', '+').Replace('_', '/');
-        b64 += new string('=', (4 - (b64.Length % 4)) % 4);
-        string wsToken = "";
-        try
-        {
-            string decoded = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
-            string[] tokenParts = decoded.Split(":::");
-            if (tokenParts.Length >= 2 && tokenParts[1].Length == 32)
-            {
-                wsToken = tokenParts[1];
-            }
-            else if (decoded.Trim().Length == 32)
-            {
-                wsToken = decoded.Trim();
-            }
-        }
-        catch (FormatException)
-        {
-            if (b64.Length == 32) wsToken = b64;
-        }
-
+        string wsToken = DecodeMoodleRedirectToken(locationHeader);
         if (string.IsNullOrEmpty(wsToken) || wsToken.Length != 32)
         {
             logger.LogError("Step 6 token decode failed from: {Loc}", locationHeader);
             throw new InvalidOperationException();
         }
+
         logger.LogInformation("Step 6: Successfully extracted token {TokenPrefix}...", wsToken[..6]);
 
         // 7. Fetch user info using core_webservice_get_site_info
         SiteInfoDto? siteInfoJson = null;
         try
         {
-            using FormUrlEncodedContent siteInfoContent = new FormUrlEncodedContent(new Dictionary<string, string>
+            using FormUrlEncodedContent siteInfoContent = new(new Dictionary<string, string>
             {
                 { "wstoken", wsToken },
                 { "wsfunction", "core_webservice_get_site_info" },
@@ -334,15 +318,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
         }
 
         // 8. Optionally retrieve LTI launch token for softeng-hw portal
-        string? ltik = null;
-        try
-        {
-            ltik = await TryExtractLtiTokenAsync(client, ct);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning("Optional LTI token extraction failed (non-blocking): {Msg}", ex.Message);
-        }
+        string? ltik = await TryExtractLtiTokenAsync(client, ct);
 
         return new LoginResponseDto(
             Token: MoodleTokenCrypto.Protect(wsToken),
@@ -353,211 +329,34 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
         );
     }
 
-    public async Task<string?> ExtractLtiTokenFromWsTokenAsync(string wsTokenInput, CancellationToken parentCt = default)
+    private static string DecodeMoodleRedirectToken(string locationHeader)
     {
+        string b64 = locationHeader.Split("token=").Last().Split('&')[0];
+        b64 = WebUtility.UrlDecode(b64).Replace('-', '+').Replace('_', '/');
+        b64 += new string('=', (4 - (b64.Length % 4)) % 4);
         try
         {
-            string? wsToken = MoodleTokenCrypto.Unprotect(wsTokenInput);
-            if (string.IsNullOrEmpty(wsToken))
+            string decoded = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+            string[] tokenParts = decoded.Split(":::");
+            if (tokenParts.Length >= 2 && tokenParts[1].Length == 32)
             {
-                return null;
+                return tokenParts[1];
             }
 
-            using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(parentCt);
-            cts.CancelAfter(TimeSpan.FromSeconds(5));
-            CancellationToken ct = cts.Token;
-
-            CookieContainer cookieContainer = new CookieContainer();
-            using SocketsHttpHandler handler = new SocketsHttpHandler
+            if (decoded.Trim().Length == 32)
             {
-                AllowAutoRedirect = false,
-                UseCookies = true,
-                CookieContainer = cookieContainer,
-                AutomaticDecompression = DecompressionMethods.All
-            };
-
-            using HttpClient client = new HttpClient(handler);
-            client.Timeout = TimeSpan.FromSeconds(5);
-            client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
-            client.DefaultRequestHeaders.Add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
-
-            // 1. Find LTI tool ID in Course 16995 via mod_lti_get_ltis_by_courses
-            int toolId = 0;
-            using (FormUrlEncodedContent ltisReq = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                { "wstoken", wsToken },
-                { "wsfunction", "mod_lti_get_ltis_by_courses" },
-                { "courseids[0]", "16995" },
-                { "moodlewsrestformat", "json" }
-            }))
-            {
-                using HttpResponseMessage ltisResp = await client.PostAsync($"{MoodleBase}/webservice/rest/server.php", ltisReq, ct);
-                if (ltisResp.IsSuccessStatusCode)
-                {
-                    System.Text.Json.Nodes.JsonNode? ltisJson = await ltisResp.Content.ReadFromJsonAsync<System.Text.Json.Nodes.JsonNode>(cancellationToken: ct);
-                    System.Text.Json.Nodes.JsonArray? ltisArr = ltisJson?["ltis"] as System.Text.Json.Nodes.JsonArray;
-                    if (ltisArr != null)
-                    {
-                        foreach (System.Text.Json.Nodes.JsonNode? item in ltisArr)
-                        {
-                            int cmid = item?["coursemodule"]?.GetValue<int>() ?? 0;
-                            int id = item?["id"]?.GetValue<int>() ?? 0;
-                            if (cmid == 221136 && id > 0)
-                            {
-                                toolId = id;
-                                break;
-                            }
-                            if (toolId == 0 && id > 0)
-                            {
-                                toolId = id;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (toolId <= 0)
-            {
-                logger.LogWarning("LTI via wstoken: Could not find LTI tool ID in course 16995");
-                return null;
-            }
-
-            // 2. Request signed launch data via mod_lti_get_tool_launch_data
-            string? endpoint = null;
-            List<KeyValuePair<string, string>> launchParams = [];
-            using (FormUrlEncodedContent launchDataReq = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                { "wstoken", wsToken },
-                { "wsfunction", "mod_lti_get_tool_launch_data" },
-                { "toolid", toolId.ToString() },
-                { "moodlewsrestformat", "json" }
-            }))
-            {
-                using HttpResponseMessage launchResp = await client.PostAsync($"{MoodleBase}/webservice/rest/server.php", launchDataReq, ct);
-                if (!launchResp.IsSuccessStatusCode)
-                {
-                    return null;
-                }
-
-                System.Text.Json.Nodes.JsonNode? launchJson = await launchResp.Content.ReadFromJsonAsync<System.Text.Json.Nodes.JsonNode>(cancellationToken: ct);
-                endpoint = launchJson?["endpoint"]?.ToString();
-                System.Text.Json.Nodes.JsonArray? paramsArr = launchJson?["parameters"] as System.Text.Json.Nodes.JsonArray;
-                if (paramsArr != null)
-                {
-                    foreach (System.Text.Json.Nodes.JsonNode? p in paramsArr)
-                    {
-                        string? name = p?["name"]?.ToString();
-                        string? val = p?["value"]?.ToString();
-                        if (!string.IsNullOrEmpty(name) && val != null)
-                        {
-                            launchParams.Add(new KeyValuePair<string, string>(name, val));
-                        }
-                    }
-                }
-            }
-
-            if (string.IsNullOrEmpty(endpoint) || !IsAllowedUrl(endpoint, out _))
-            {
-                logger.LogWarning("LTI via wstoken: Invalid or untrusted endpoint {Endpoint}", endpoint);
-                return null;
-            }
-
-            // 3. Submit signed launch parameters to endpoint
-            using FormUrlEncodedContent initialPost = new FormUrlEncodedContent(launchParams);
-            (HttpResponseMessage? resp, string? capturedLtik) = await PostWithRedirectsAsync(client, endpoint, initialPost, ct);
-            if (!string.IsNullOrEmpty(capturedLtik))
-            {
-                resp?.Dispose();
-                return capturedLtik;
-            }
-            if (resp == null) return null;
-
-            try
-            {
-                string? loc = GetLocation(resp);
-                if (!string.IsNullOrEmpty(loc) && loc.Contains("ltik=", StringComparison.Ordinal))
-                {
-                    return ExtractLtikFromUrl(loc);
-                }
-
-                string html = await resp.Content.ReadAsStringAsync(ct);
-                Match m = LtikRegex().Match(html);
-                if (m.Success)
-                {
-                    return m.Groups[1].Value;
-                }
-
-                if (IsCloudflareResponse(resp, html))
-                {
-                    logger.LogWarning("LTI via wstoken: Cloudflare block detected on {Endpoint}", endpoint);
-                    return null;
-                }
-
-                // Follow any intermediate auto-submitting forms
-                for (int hop = 0; hop < 4; hop++)
-                {
-                    if (ct.IsCancellationRequested) break;
-
-                    string formAction = WebUtility.HtmlDecode(MatchFirst(FormActionRegex(), html));
-                    if (string.IsNullOrEmpty(formAction)) break;
-
-                    formAction = ResolveUrl(endpoint, formAction);
-                    if (!IsAllowedUrl(formAction, out _)) return null;
-
-                    Dictionary<string, string> formData = new Dictionary<string, string>();
-                    foreach (Match inp in InputTagRegex().Matches(html))
-                    {
-                        string tag = inp.Value;
-                        string name = MatchFirst(InputNameRegex(), tag);
-                        string val = WebUtility.HtmlDecode(MatchFirst(InputValueRegex(), tag));
-                        if (!string.IsNullOrEmpty(name))
-                        {
-                            formData[name] = val;
-                        }
-                    }
-
-                    using FormUrlEncodedContent hopPost = new FormUrlEncodedContent(formData);
-                    (HttpResponseMessage? postResp, string? postCapturedLtik) = await PostWithRedirectsAsync(client, formAction, hopPost, ct);
-                    if (!string.IsNullOrEmpty(postCapturedLtik))
-                    {
-                        postResp?.Dispose();
-                        return postCapturedLtik;
-                    }
-                    if (postResp == null) break;
-
-                    resp.Dispose();
-                    resp = postResp;
-
-                    string? postLoc = GetLocation(resp);
-                    if (!string.IsNullOrEmpty(postLoc) && postLoc.Contains("ltik=", StringComparison.Ordinal))
-                    {
-                        return ExtractLtikFromUrl(postLoc);
-                    }
-
-                    html = await resp.Content.ReadAsStringAsync(ct);
-                    m = LtikRegex().Match(html);
-                    if (m.Success)
-                    {
-                        return m.Groups[1].Value;
-                    }
-
-                    if (!resp.IsSuccessStatusCode || IsCloudflareResponse(resp, html))
-                    {
-                        return null;
-                    }
-                }
-            }
-            finally
-            {
-                resp.Dispose();
+                return decoded.Trim();
             }
         }
-        catch (Exception ex)
+        catch (FormatException)
         {
-            logger.LogWarning("LTI via wstoken failed (non-blocking): {Msg}", ex.Message);
+            if (b64.Length == 32)
+            {
+                return b64;
+            }
         }
 
-        return null;
+        return string.Empty;
     }
 
     private async Task<string?> TryExtractLtiTokenAsync(HttpClient client, CancellationToken parentCt)
@@ -565,7 +364,6 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
         try
         {
             logger.LogInformation("Step 8: Attempting to retrieve LTI token for module 221136");
-            // Strict timeout to avoid exceeding host/cloud router limits (e.g. Heroku 30s)
             using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(parentCt);
             cts.CancelAfter(TimeSpan.FromSeconds(4));
             CancellationToken ct = cts.Token;
@@ -587,6 +385,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
                     logger.LogInformation("LTI: Captured ltik from initial GET redirect");
                     return capturedLtik;
                 }
+
                 if (resp == null) continue;
 
                 try
@@ -597,6 +396,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
                     {
                         return ExtractLtikFromUrl(loc);
                     }
+
                     Match m = LtikRegex().Match(html);
                     if (m.Success)
                     {
@@ -624,6 +424,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
                                 iframeResp?.Dispose();
                                 return iframeCapturedLtik;
                             }
+
                             if (iframeResp != null)
                             {
                                 resp.Dispose();
@@ -634,6 +435,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
                                 {
                                     return ExtractLtikFromUrl(loc);
                                 }
+
                                 if (IsCloudflareResponse(resp, html))
                                 {
                                     logger.LogWarning("LTI: Cloudflare block detected on iframe {Url}. Aborting LTI launch.", iframeSrc);
@@ -651,7 +453,8 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
                         string formAction = WebUtility.HtmlDecode(MatchFirst(FormActionRegex(), html));
                         if (string.IsNullOrEmpty(formAction)) break;
 
-                        formAction = ResolveUrl(MoodleBase, formAction);
+                        string baseUri = resp.RequestMessage?.RequestUri?.ToString() ?? MoodleBase;
+                        formAction = ResolveUrl(baseUri, formAction);
                         if (!IsAllowedUrl(formAction, out _))
                         {
                             logger.LogWarning("LTI: Blocked form submission to untrusted host: {Action}", formAction);
@@ -665,20 +468,9 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
                         }
 
                         logger.LogInformation("LTI: Submitting form hop {Hop} to {Action}", hop, formAction);
-                        Dictionary<string, string> formData = new Dictionary<string, string>();
-                        MatchCollection inputMatches = InputTagRegex().Matches(html);
-                        foreach (Match inp in inputMatches)
-                        {
-                            string tag = inp.Value;
-                            string name = MatchFirst(InputNameRegex(), tag);
-                            string val = WebUtility.HtmlDecode(MatchFirst(InputValueRegex(), tag));
-                            if (!string.IsNullOrEmpty(name))
-                            {
-                                formData[name] = val;
-                            }
-                        }
+                        Dictionary<string, string> formData = ExtractHtmlFormInputs(html);
 
-                        using FormUrlEncodedContent postContent = new FormUrlEncodedContent(formData);
+                        using FormUrlEncodedContent postContent = new(formData);
                         (HttpResponseMessage? postResp, string? postCapturedLtik) = await PostWithRedirectsAsync(client, formAction, postContent, ct);
                         if (!string.IsNullOrEmpty(postCapturedLtik))
                         {
@@ -686,6 +478,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
                             logger.LogInformation("LTI: Successfully captured ltik during POST hop {Hop} redirect!", hop);
                             return postCapturedLtik;
                         }
+
                         if (postResp == null) break;
 
                         resp.Dispose();
@@ -727,7 +520,25 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
         {
             logger.LogWarning("Optional LTI token retrieval failed (non-blocking): {Msg}", ex.Message);
         }
+
         return null;
+    }
+
+    private static Dictionary<string, string> ExtractHtmlFormInputs(string html)
+    {
+        Dictionary<string, string> formData = [];
+        foreach (Match inp in InputTagRegex().Matches(html))
+        {
+            string tag = inp.Value;
+            string name = MatchFirst(InputNameRegex(), tag);
+            string val = WebUtility.HtmlDecode(MatchFirst(InputValueRegex(), tag));
+            if (!string.IsNullOrEmpty(name))
+            {
+                formData[name] = val;
+            }
+        }
+
+        return formData;
     }
 
     private static bool IsCloudflareResponse(HttpResponseMessage resp, string html)
@@ -759,14 +570,20 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
         {
             return nonVal.FirstOrDefault();
         }
+
         if (resp.Headers.TryGetValues("Location", out IEnumerable<string>? vals))
         {
             return vals.FirstOrDefault();
         }
+
         return resp.Headers.Location?.ToString();
     }
 
-    private static async Task<(HttpResponseMessage? Response, string? CapturedLtik)> GetWithRedirectsAsync(HttpClient client, string url, CancellationToken ct = default, int maxRedirects = 5)
+    private static async Task<(HttpResponseMessage? Response, string? CapturedLtik)> GetWithRedirectsAsync(
+        HttpClient client,
+        string url,
+        CancellationToken ct = default,
+        int maxRedirects = 5)
     {
         HttpResponseMessage? resp = null;
         for (int i = 0; i < maxRedirects; i++)
@@ -777,6 +594,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
             {
                 return (resp, ExtractLtikFromUrl(url));
             }
+
             if (!IsAllowedUrl(url, out _))
             {
                 break;
@@ -789,17 +607,25 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
             {
                 return (resp, ExtractLtikFromUrl(loc));
             }
+
             if ((int)resp.StatusCode is >= 300 and <= 399 && !string.IsNullOrEmpty(loc))
             {
                 url = ResolveUrl(url, loc);
                 continue;
             }
+
             return (resp, null);
         }
+
         return (resp, null);
     }
 
-    private static async Task<(HttpResponseMessage? Response, string? CapturedLtik)> PostWithRedirectsAsync(HttpClient client, string url, HttpContent content, CancellationToken ct = default, int maxRedirects = 5)
+    private static async Task<(HttpResponseMessage? Response, string? CapturedLtik)> PostWithRedirectsAsync(
+        HttpClient client,
+        string url,
+        HttpContent content,
+        CancellationToken ct = default,
+        int maxRedirects = 5)
     {
         if (!IsAllowedUrl(url, out _))
         {
@@ -816,6 +642,7 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
             {
                 return (resp, ExtractLtikFromUrl(loc));
             }
+
             if ((int)resp.StatusCode is >= 300 and <= 399 && !string.IsNullOrEmpty(loc))
             {
                 url = ResolveUrl(url, loc);
@@ -823,16 +650,20 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
                 {
                     return (resp, ExtractLtikFromUrl(url));
                 }
+
                 if (!IsAllowedUrl(url, out _))
                 {
                     break;
                 }
+
                 resp.Dispose();
                 resp = await client.GetAsync(url, ct);
                 continue;
             }
+
             break;
         }
+
         return (resp, null);
     }
 
@@ -844,11 +675,13 @@ public partial class MoodleAuthService(ILogger<MoodleAuthService> logger)
 
     private sealed class SiteInfoDto
     {
-        [System.Text.Json.Serialization.JsonPropertyName("userid")]
+        [JsonPropertyName("userid")]
         public int UserId { get; set; }
-        [System.Text.Json.Serialization.JsonPropertyName("fullname")]
+
+        [JsonPropertyName("fullname")]
         public string? FullName { get; set; }
-        [System.Text.Json.Serialization.JsonPropertyName("username")]
+
+        [JsonPropertyName("username")]
         public string? Username { get; set; }
     }
 }

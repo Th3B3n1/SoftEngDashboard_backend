@@ -7,20 +7,17 @@ namespace Backend.Controllers;
 
 [ApiController]
 [Route("api/auth")]
-public class AuthController(
-    MoodleAuthService authService) : ControllerBase
+public class AuthController(MoodleAuthService authService) : ControllerBase
 {
-    private readonly MoodleAuthService _authService = authService;
-
     /// <summary>
-    /// Authenticates a user against BME IdP / Shibboleth Moodle and extracts a token.
-    /// Rate-limited to 10 requests per minute to prevent brute-force attacks.
+    /// Authenticates a user against BME IdP / Shibboleth Moodle and extracts an encrypted token.
+    /// Rate-limited to 10 requests per minute per IP to prevent brute-force attacks.
     /// </summary>
     [HttpPost("login")]
     [EnableRateLimiting("auth")]
     public async Task<ActionResult<LoginResponseDto>> Login([FromBody] LoginRequestDto request, CancellationToken ct)
     {
-        LoginResponseDto result = await _authService.LoginAsync(request.Username, request.Password, ct);
+        LoginResponseDto result = await authService.LoginAsync(request.Username, request.Password, ct);
         return Ok(result);
     }
 
@@ -41,4 +38,3 @@ public class AuthController(
         return Ok(new { token = protectedToken });
     }
 }
-
