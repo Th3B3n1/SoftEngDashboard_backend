@@ -10,6 +10,18 @@ using Backend.Services;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
+string frontendUrlRaw = Environment.GetEnvironmentVariable("FRONTEND_URL")
+    ?? throw new InvalidOperationException("Required environment variable 'FRONTEND_URL' is not set.");
+string[] allowedOrigins = frontendUrlRaw.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+if (allowedOrigins.Length == 0)
+{
+    throw new InvalidOperationException("Environment variable 'FRONTEND_URL' must contain at least one valid origin.");
+}
+
+string tokenEncryptionKey = Environment.GetEnvironmentVariable("TOKEN_ENCRYPTION_KEY")
+    ?? throw new InvalidOperationException("Required environment variable 'TOKEN_ENCRYPTION_KEY' is not set.");
+MoodleTokenCrypto.Initialize(tokenEncryptionKey);
+
 builder.Services.AddControllers(options =>
 {
     options.Filters.Add<GlobalExceptionFilter>();
@@ -43,9 +55,6 @@ builder.Services.AddHttpClient("MoodleApi", client =>
 builder.Services.AddSingleton<MoodleAuthService>();
 builder.Services.AddSingleton<MoodleProxyService>();
 builder.Services.AddScoped<HfPortalService>();
-
-string[] allowedOrigins = Environment.GetEnvironmentVariable("FRONTEND_URL")?.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-    ?? ["http://localhost:5173", "http://localhost:5174", "http://localhost:5228", "https://localhost:7203"];
 
 builder.Services.AddCors(options =>
 {

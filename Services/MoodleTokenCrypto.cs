@@ -10,17 +10,23 @@ public static partial class MoodleTokenCrypto
     private const int NonceSize = 12;
     private const int TagSize = 16;
 
-    private static readonly byte[] Key = DeriveKey();
+    private static byte[]? _key;
 
     [GeneratedRegex(@"^[0-9a-fA-F]{32}$", RegexOptions.CultureInvariant, matchTimeoutMilliseconds: 500)]
     private static partial Regex RawHexTokenRegex();
 
-    private static byte[] DeriveKey()
+    public static void Initialize(string secret)
     {
-        string secret = Environment.GetEnvironmentVariable("TOKEN_ENCRYPTION_KEY")
-            ?? "SoftDevBMEDash-VIK-Course550-TokenKey-2026";
-        return SHA256.HashData(Encoding.UTF8.GetBytes(secret));
+        if (string.IsNullOrWhiteSpace(secret))
+        {
+            throw new InvalidOperationException("Required environment variable 'TOKEN_ENCRYPTION_KEY' cannot be empty.");
+        }
+
+        _key = SHA256.HashData(Encoding.UTF8.GetBytes(secret));
     }
+
+    private static byte[] GetKey() =>
+        _key ?? throw new InvalidOperationException("MoodleTokenCrypto has not been initialized. Call MoodleTokenCrypto.Initialize in Program.cs.");
 
     public static bool IsValidRawToken(string token) =>
         !string.IsNullOrWhiteSpace(token) && RawHexTokenRegex().IsMatch(token.Trim());
@@ -33,12 +39,13 @@ public static partial class MoodleTokenCrypto
             throw new ArgumentException("Invalid raw Moodle token format.");
         }
 
+        byte[] key = GetKey();
         byte[] plaintext = Encoding.UTF8.GetBytes(clean);
         byte[] nonce = RandomNumberGenerator.GetBytes(NonceSize);
         byte[] ciphertext = new byte[plaintext.Length];
         byte[] tag = new byte[TagSize];
 
-        using (AesGcm aes = new AesGcm(Key, TagSize))
+        using (AesGcm aes = new AesGcm(key, TagSize))
         {
             aes.Encrypt(nonce, plaintext, ciphertext, tag);
         }
@@ -89,12 +96,13 @@ public static partial class MoodleTokenCrypto
                 return null;
             }
 
+            byte[] key = GetKey();
             byte[] nonce = combined[..NonceSize];
             byte[] tag = combined[NonceSize..(NonceSize + TagSize)];
             byte[] ciphertext = combined[(NonceSize + TagSize)..];
             byte[] plaintext = new byte[ciphertext.Length];
 
-            using (AesGcm aes = new AesGcm(Key, TagSize))
+            using (AesGcm aes = new AesGcm(key, TagSize))
             {
                 aes.Decrypt(nonce, ciphertext, tag, plaintext);
             }
@@ -112,4 +120,3 @@ public static partial class MoodleTokenCrypto
         }
     }
 }
-

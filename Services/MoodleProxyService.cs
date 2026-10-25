@@ -31,11 +31,11 @@ public class MoodleProxyService(ILogger<MoodleProxyService> logger, IHttpClientF
         "mod_assign_get_submission_status"
     };
 
-    // Cache of quiz IDs and assignment IDs confirmed to belong to Course 550
-    private static readonly ConcurrentDictionary<int, byte> Course550QuizIds = new();
-    private static readonly ConcurrentDictionary<int, byte> Course550AssignIds = new();
+    // Cache of quiz IDs and assignment IDs confirmed to belong to Course 16995
+    private static readonly ConcurrentDictionary<int, byte> CourseQuizIds = new();
+    private static readonly ConcurrentDictionary<int, byte> CourseAssignIds = new();
 
-    public async Task<(int StatusCode, string ContentJson)> ExecuteReadOnlyCourse550CallAsync(
+    public async Task<(int StatusCode, string ContentJson)> ExecuteReadOnlyCourseCallAsync(
         IFormCollection form,
         CancellationToken ct = default)
     {
@@ -88,7 +88,7 @@ public class MoodleProxyService(ILogger<MoodleProxyService> logger, IHttpClientF
 
         if (resp.IsSuccessStatusCode)
         {
-            TrackCourse550ModuleIds(wsFunction, body);
+            TrackCourseModuleIds(wsFunction, body);
         }
 
         return ((int)resp.StatusCode, body);
@@ -118,7 +118,7 @@ public class MoodleProxyService(ILogger<MoodleProxyService> logger, IHttpClientF
             case "mod_quiz_get_quizzes_by_courses":
             case "mod_assign_get_assignments":
             {
-                // Must only query courseids[0]=550 and no other courseids
+                // Must only query courseids[0]=16995 and no other courseids
                 string? c0 = form["courseids[0]"].FirstOrDefault();
                 if (c0 != AllowedCourseId)
                 {
@@ -165,18 +165,18 @@ public class MoodleProxyService(ILogger<MoodleProxyService> logger, IHttpClientF
                             if (subFn is "mod_quiz_get_user_best_grade" or "mod_quiz_get_user_attempts")
                             {
                                 int quizId = argsNode?["quizid"]?.GetValue<int>() ?? 0;
-                                if (quizId <= 0 || (!Course550QuizIds.IsEmpty && !Course550QuizIds.ContainsKey(quizId)))
+                                if (quizId <= 0 || (!CourseQuizIds.IsEmpty && !CourseQuizIds.ContainsKey(quizId)))
                                 {
-                                    reason = $"Quiz ID {quizId} is not in Course 550";
+                                    reason = $"Quiz ID {quizId} is not in Course 16995";
                                     return false;
                                 }
                             }
                             else if (subFn == "mod_assign_get_submission_status")
                             {
                                 int assignId = argsNode?["assignid"]?.GetValue<int>() ?? 0;
-                                if (assignId <= 0 || (!Course550AssignIds.IsEmpty && !Course550AssignIds.ContainsKey(assignId)))
+                                if (assignId <= 0 || (!CourseAssignIds.IsEmpty && !CourseAssignIds.ContainsKey(assignId)))
                                 {
-                                    reason = $"Assign ID {assignId} is not in Course 550";
+                                    reason = $"Assign ID {assignId} is not in Course 16995";
                                     return false;
                                 }
                             }
@@ -197,7 +197,7 @@ public class MoodleProxyService(ILogger<MoodleProxyService> logger, IHttpClientF
         }
     }
 
-    private static void TrackCourse550ModuleIds(string wsFunction, string responseJson)
+    private static void TrackCourseModuleIds(string wsFunction, string responseJson)
     {
         try
         {
@@ -211,7 +211,7 @@ public class MoodleProxyService(ILogger<MoodleProxyService> logger, IHttpClientF
                         int id = q?["id"]?.GetValue<int>() ?? 0;
                         if (id > 0)
                         {
-                            Course550QuizIds.TryAdd(id, 1);
+                            CourseQuizIds.TryAdd(id, 1);
                         }
                     }
                 }
@@ -230,7 +230,7 @@ public class MoodleProxyService(ILogger<MoodleProxyService> logger, IHttpClientF
                                 int id = a?["id"]?.GetValue<int>() ?? 0;
                                 if (id > 0)
                                 {
-                                    Course550AssignIds.TryAdd(id, 1);
+                                    CourseAssignIds.TryAdd(id, 1);
                                 }
                             }
                         }
