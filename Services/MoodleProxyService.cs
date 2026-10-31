@@ -21,6 +21,7 @@ public class MoodleProxyService(ILogger<MoodleProxyService> logger, IHttpClientF
         "mod_quiz_get_quizzes_by_courses",
         "mod_assign_get_assignments",
         "core_completion_get_activities_completion_status",
+        "tool_mobile_get_content",
         "tool_mobile_call_external_functions"
     };
 
@@ -110,6 +111,18 @@ public class MoodleProxyService(ILogger<MoodleProxyService> logger, IHttpClientF
                 if (courseId != AllowedCourseId)
                 {
                     reason = $"courseid={courseId}";
+                    return false;
+                }
+                return true;
+            }
+
+            case "tool_mobile_get_content":
+            {
+                string? component = form["component"].FirstOrDefault();
+                string? method = form["method"].FirstOrDefault();
+                if (component != "mod_attendance" || method != "mobile_view_activity")
+                {
+                    reason = $"component={component}, method={method}";
                     return false;
                 }
                 return true;
